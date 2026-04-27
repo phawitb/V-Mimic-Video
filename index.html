@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mimic Videos Queue Master</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f0f2f5; }
+        .log-container { max-height: 400px; overflow-y: auto; background-color: #0f172a; color: #38bdf8; font-family: 'Fira Code', monospace; font-size: 0.8rem; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+        .btn-view { background: #10b981; color: white; padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 10px; text-transform: uppercase; }
+        .btn-view:hover { background: #059669; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const BASE_URL = 'http://localhost:8123';
+
+        function App() {
+            const [linksText, setLinksText] = useState('');
+            const [playlistName, setPlaylistName] = useState('spoil_movie');
+            const [useVoxcpm, setUseVoxcpm] = useState(true);
+            const [useAnime, setUseAnime] = useState(true);
+            
+            const [startTime, setStartTime] = useState('09:00');
+            const [endTime, setEndTime] = useState('23:59');
+            const [isEnabled, setIsEnabled] = useState(true);
+
+            const [jobs, setJobs] = useState([]);
+            const [status, setStatus] = useState({});
+            const [expandedJobId, setExpandedJobId] = useState(null);
+            const [jobLogs, setJobLogs] = useState([]);
+            const [editingJob, setEditingJob] = useState(null);
+            const [showSaved, setShowSaved] = useState(false);
+
+            const pollInterval = useRef(null);
+            const initialLoad = useRef(true);
+
+            const fetchData = async () => {
+                try {
+                    const [jobsRes, statusRes] = await Promise.all([
+                        fetch(`${BASE_URL}/jobs`),
+                        fetch(`${BASE_URL}/status`)
+                    ]);
+                    const jobsData = await jobsRes.json();
+                    const statusData = await statusRes.json();
+                    
+                    setJobs(jobsData);
+                    setStatus(statusData);
+
+                    // Sync settings inputs with server on first load
+                    if (initialLoad.current && statusData.settings) {
+                        setStartTime(statusData.settings.start_time);
+                        setEndTime(statusData.settings.end_time);
+                        setIsEnabled(statusData.settings.is_enabled);
+                        initialLoad.current = false;
+                    }
+                } catch (e) { console.error(e); }
+            };
+
+            const fetchLogs = async (id) => {
+                if (!id) return;
+                try {
+                    const res = await fetch(`${BASE_URL}/jobs/${id}/logs`);
+                    setJobLogs(await res.json());
+                } catch (e) { console.error(e); }
+            };
+
+            useEffect(() => {
+                fetchData();
+                pollInterval.current = setInterval(() => {
+                    fetchData();
+                }, 3000);
+                return () => clearInterval(pollInterval.current);
+            }, []);
+
+            // Handle log polling when expanded
+            useEffect(() => {
+                if (!expandedJobId) {
+                    setJobLogs([]);
+                    return;
+                }
+                fetchLogs(expandedJobId);
+                const logInterval = setInterval(() => fetchLogs(expandedJobId), 2000);
+                return () => clearInterval(logInterval);
+            }, [expandedJobId]);
+
+            const submitLinks = async (e) => {
+                e.preventDefault();
+                const urls = linksText.split('\n').filter(l => l.trim());
+                await fetch(`${BASE_URL}/links`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        video_urls: urls, playlist_name: playlistName,
+                        use_voxcpm_tts: useVoxcpm, use_anime: useAnime
+                    })
+                });
+                setLinksText('');
+                fetchData();
+            };
+
+            const runManual = async (id) => {
+                const res = await fetch(`${BASE_URL}/jobs/${id}/run`, { method: 'POST' });
+                if (!res.ok) {
+                    const err = await res.json();
+                    alert(err.detail);
+                }
+                fetchData();
+            };
+
+            const deleteJob = async (id) => {
+                if (!confirm('Delete this job?')) return;
+                await fetch(`${BASE_URL}/jobs/${id}`, { method: 'DELETE' });
+                fetchData();
+            };
+
+            const updateJob = async (id, data) => {
+                await fetch(`${BASE_URL}/jobs/${id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                setEditingJob(null);
+                fetchData();
+            };
+
+            const interruptJob = async (id) => {
+                if (!confirm('Interrupt this job?')) return;
+                await fetch(`${BASE_URL}/jobs/${id}/interrupt`, { method: 'POST' });
+                fetchData();
+            };
+
+            const openFolder = async (path) => {
+                await fetch(`${BASE_URL}/open-folder?path=${encodeURIComponent(path)}`);
+            };
+
+            const openFile = async (path) => {
+                await fetch(`${BASE_URL}/open-file?path=${encodeURIComponent(path)}`);
+            };
+
+            const saveSettings = async () => {
+                await fetch(`${BASE_URL}/settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ start_time: startTime, end_time: endTime, is_enabled: isEnabled })
+                });
+                setShowSaved(true);
+                setTimeout(() => setShowSaved(false), 2000);
+                fetchData();
+            };
+
+            return (
+                <div className="container mx-auto p-6 max-w-[1400px]">
+                    <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <h1 className="text-4xl font-extrabold text-slate-900">Mimic Videos <span className="text-blue-600">Queue Master</span></h1>
+                            <p className="text-slate-500 mt-1">Automated Video Production Pipeline</p>
+                        </div>
+                        <div className="flex items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                            <div className="text-right">
+                                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Working Period</div>
+                                <div className="text-sm font-semibold text-slate-700">{status.settings?.start_time} - {status.settings?.end_time}</div>
+                            </div>
+                            <div className={`w-3 h-3 rounded-full animate-pulse ${status.is_working_now ? 'bg-green-500' : 'bg-amber-500'}`}></div>
+                            <div className="text-sm font-bold uppercase">{status.is_working_now ? 'Working' : 'Sleeping'}</div>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+                        <div className="xl:col-span-3 space-y-6">
+                            {/* Working Settings */}
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                                <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">Settings</h2>
+                                <div className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase">Start</label>
+                                            <input type="text" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-mono" />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 uppercase">End</label>
+                                            <input type="text" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-mono" />
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-sm font-medium">Enabled</span>
+                                        <input type="checkbox" checked={isEnabled} onChange={e => setIsEnabled(e.target.checked)} className="w-4 h-4" />
+                                    </div>
+                                    <button onClick={saveSettings} className={`w-full py-2 rounded-lg font-bold text-sm transition-all ${showSaved ? 'bg-green-500 text-white' : 'bg-slate-800 text-white hover:bg-slate-700'}`}>
+                                        {showSaved ? 'Settings Saved! ✅' : 'Save Settings'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Add Links */}
+                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                                <h2 className="text-lg font-bold text-slate-800 mb-4">Add Queue</h2>
+                                <form onSubmit={submitLinks} className="space-y-4">
+                                    <textarea value={linksText} onChange={e => setLinksText(e.target.value)} className="w-full h-40 p-3 bg-slate-50 border rounded-xl text-xs font-mono resize-none focus:ring-2 focus:ring-blue-500 outline-none" placeholder="URLs (one per line)" required></textarea>
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Playlist</label>
+                                        <input type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-semibold" />
+                                    </div>
+                                    <div className="flex gap-4">
+                                        <label className="flex items-center gap-2 text-xs font-bold cursor-pointer"><input type="checkbox" checked={useVoxcpm} onChange={e => setUseVoxcpm(e.target.checked)} /> VoxCPM</label>
+                                        <label className="flex items-center gap-2 text-xs font-bold cursor-pointer"><input type="checkbox" checked={useAnime} onChange={e => setUseAnime(e.target.checked)} /> Anime</label>
+                                    </div>
+                                    <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95">Add to Queue</button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div className="xl:col-span-9 space-y-6">
+                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse table-fixed">
+                                        <thead className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                            <tr>
+                                                <th className="px-4 py-3 text-left w-28">Status</th>
+                                                <th className="px-4 py-3 text-left">Video URL</th>
+                                                <th className="px-4 py-3 text-left w-32">Playlist</th>
+                                                <th className="px-4 py-3 text-center w-20">VoxCPM</th>
+                                                <th className="px-4 py-3 text-center w-20">Anime</th>
+                                                <th className="px-4 py-3 text-right w-64">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {jobs.map(job => (
+                                                <React.Fragment key={job.id}>
+                                                    <tr className={`hover:bg-slate-50/80 transition-colors ${expandedJobId === job.id ? 'bg-blue-50/30' : ''}`}>
+                                                        <td className="px-4 py-4 whitespace-nowrap">
+                                                            <button onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)} className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-tight ${
+                                                                job.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                                                job.status === 'failed' ? 'bg-red-100 text-red-700' :
+                                                                job.status === 'processing' ? 'bg-blue-100 text-blue-700 animate-pulse' :
+                                                                'bg-slate-100 text-slate-500'
+                                                            }`}>
+                                                                {job.status} {expandedJobId === job.id ? '▲' : '▼'}
+                                                            </button>
+                                                        </td>
+                                                        <td className="px-4 py-4 min-w-[200px]">
+                                                            <div className="text-xs font-medium text-slate-800 line-clamp-1" title={job.video_url}>{job.video_url}</div>
+                                                        </td>
+                                                        <td className="px-4 py-4">
+                                                            {editingJob?.id === job.id ? (
+                                                                <input type="text" value={editingJob.playlist_name} onChange={e => setEditingJob({...editingJob, playlist_name: e.target.value})} className="p-1 border text-xs rounded w-full" />
+                                                            ) : (
+                                                                <span className="text-xs font-semibold text-slate-600">{job.playlist_name}</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-4 text-center">
+                                                            {editingJob?.id === job.id ? (
+                                                                <input type="checkbox" checked={editingJob.use_voxcpm_tts} onChange={e => setEditingJob({...editingJob, use_voxcpm_tts: e.target.checked})} />
+                                                            ) : (
+                                                                <div className={`w-2 h-2 rounded-full mx-auto ${job.use_voxcpm_tts ? 'bg-blue-500' : 'bg-slate-200'}`}></div>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-4 text-center">
+                                                            {editingJob?.id === job.id ? (
+                                                                <input type="checkbox" checked={editingJob.use_anime} onChange={e => setEditingJob({...editingJob, use_anime: e.target.checked})} />
+                                                            ) : (
+                                                                <div className={`w-2 h-2 rounded-full mx-auto ${job.use_anime ? 'bg-purple-500' : 'bg-slate-200'}`}></div>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-4 text-right whitespace-nowrap space-x-2">
+                                                            {job.status === 'processing' && (
+                                                                <button onClick={() => interruptJob(job.id)} className="bg-red-500 text-white px-2 py-1 rounded font-black text-[10px] uppercase hover:bg-red-600">Interrupt</button>
+                                                            )}
+                                                            {job.status === 'completed' && job.video_url_path && (
+                                                                <button onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)} className="btn-view">View Video</button>
+                                                            )}
+                                                            {job.status !== 'processing' && (
+                                                                <button onClick={() => runManual(job.id)} className="text-orange-500 font-black text-[10px] uppercase hover:underline">Run Now</button>
+                                                            )}
+                                                            {job.status === 'queued' && (
+                                                                editingJob?.id === job.id ? (
+                                                                    <button onClick={() => updateJob(job.id, editingJob)} className="text-green-600 font-black text-[10px] uppercase">Save</button>
+                                                                ) : (
+                                                                    <button onClick={() => setEditingJob(job)} className="text-blue-600 font-black text-[10px] uppercase">Edit</button>
+                                                                )
+                                                            )}
+                                                            {job.status !== 'processing' && (
+                                                                <button onClick={() => deleteJob(job.id)} className="text-red-400 hover:text-red-600 font-black text-[10px] uppercase">Del</button>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                    {expandedJobId === job.id && (
+                                                        <tr className="bg-slate-900">
+                                                            <td colSpan="6" className="p-0 border-t border-slate-700">
+                                                                <div className="p-6">
+                                                                    {job.status === 'completed' && job.video_url_path && (
+                                                                        <div className="mb-6 bg-slate-800 p-4 rounded-xl shadow-2xl border border-slate-700 flex flex-col md:flex-row justify-between items-center gap-4">
+                                                                            <div className="text-xs font-mono text-slate-300 break-all select-all flex-1">
+                                                                                <div className="text-[10px] text-green-500 font-black uppercase mb-1 flex items-center gap-2">
+                                                                                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                                                                                    Output Ready
+                                                                                </div>
+                                                                                <span className="text-slate-500 mr-2 uppercase font-black tracking-tighter">Path:</span>
+                                                                                {job.video_full_path || job.video_url_path}
+                                                                            </div>
+                                                                            <div className="flex gap-2">
+                                                                                <button 
+                                                                                    onClick={() => openFile(job.video_full_path || job.video_url_path)}
+                                                                                    className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap flex items-center gap-2"
+                                                                                >
+                                                                                    ▶️ Open Video
+                                                                                </button>
+                                                                                <button 
+                                                                                    onClick={() => openFolder(job.video_full_path || job.video_url_path)}
+                                                                                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap flex items-center gap-2"
+                                                                                >
+                                                                                    📁 Open Output Folder
+                                                                                </button>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+
+                                                                    <div className="log-container p-4 rounded-xl border border-slate-800">
+                                                                        <div className="flex justify-between mb-4 border-b border-slate-800 pb-2">
+                                                                            <span className="text-xs font-black text-slate-500 uppercase tracking-widest">Execution Logs</span>
+                                                                            <span className="text-xs text-slate-600 font-mono">ID: {job.id}</span>
+                                                                        </div>
+                                                                        {jobLogs.length === 0 ? (
+                                                                            <div className="text-slate-700 italic text-xs">Waiting to start...</div>
+                                                                        ) : (
+                                                                            jobLogs.map((log, i) => (
+                                                                                <div key={i} className="mb-1.5 flex gap-4 text-[11px]">
+                                                                                    <span className="text-slate-600 shrink-0">[{log.timestamp.split('T')[1].slice(0,8)}]</span>
+                                                                                    <span className="text-blue-100">{log.message}</span>
+                                                                                </div>
+                                                                            ))
+                                                                        )}
+                                                                        {job.status === 'processing' && <div className="text-blue-400 animate-pulse font-bold mt-2 text-xs">_ PROCESSING STEP...</div>}
+                                                                        {job.error && <div className="mt-4 p-3 bg-red-900/30 border border-red-500/30 text-red-400 rounded text-xs font-bold">Error: {job.error}</div>}
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                </React.Fragment>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
