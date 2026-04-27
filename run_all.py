@@ -416,6 +416,12 @@ def split_thai_sub(text, max_chars=38):
         else: break
     return "".join(l1), "".join(words[idx:])
 
+def measure_rms(audio_path, duration=30):
+    """Measure RMS amplitude of an audio file (sample up to `duration` seconds)."""
+    y, sr = librosa.load(audio_path, sr=None, mono=True, duration=duration)
+    rms = np.sqrt(np.mean(y ** 2))
+    return float(rms)
+
 def create_final_tiktok_video(input_vdo, voice_audio, output_path, title_text, srt_path, bg_audio_path=None, log_func=None):
     def log(m):
         if log_func: log_func(m)
@@ -423,26 +429,35 @@ def create_final_tiktok_video(input_vdo, voice_audio, output_path, title_text, s
 
     log("🎬 [Composer] Loading assets...")
     video = VideoFileClip(input_vdo).without_audio()
-    voice_clip = AudioFileClip(voice_audio).volumex(1.2)
 
-    # Mix background audio with Thai voice
-    audio_clips = [voice_clip]
+    # Mix background audio with Thai voice using RMS-based volume balancing
+    audio_clips = []
     if bg_audio_path and os.path.exists(bg_audio_path):
-        log("🎬 [Composer] Mixing background audio...")
-        bg_clip = AudioFileClip(bg_audio_path).volumex(0.15)
-        # Match bg duration to voice duration
+        voice_rms = measure_rms(voice_audio)
+        bg_rms = measure_rms(bg_audio_path)
+
+        # Target: bg should be 30% of voice loudness
+        BG_TARGET_RATIO = 0.30
+        if bg_rms > 0:
+            bg_vol = (BG_TARGET_RATIO * voice_rms) / bg_rms
+        else:
+            bg_vol = 0.15
+
+        log(f"🎬 [Mixer] voice RMS={voice_rms:.4f}  bg RMS={bg_rms:.4f}  → bg volume factor={bg_vol:.3f} (target {int(BG_TARGET_RATIO*100)}% of voice)")
+
+        voice_clip = AudioFileClip(voice_audio).volumex(1.0)
+        bg_clip = AudioFileClip(bg_audio_path).volumex(bg_vol)
         if bg_clip.duration > voice_clip.duration:
             bg_clip = bg_clip.set_duration(voice_clip.duration)
-        audio_clips.insert(0, bg_clip)
+        audio_clips = [bg_clip, voice_clip]
     else:
         log("⚠️ [Composer] No background audio found, using voice only")
+        voice_clip = AudioFileClip(voice_audio).volumex(1.0)
+        audio_clips = [voice_clip]
 
     mixed_audio = CompositeAudioClip(audio_clips)
 
-    # If voice is longer than video, MoviePy will freeze the last frame by default
-    # when we use CompositeVideoClip or set_duration in certain contexts.
-    # We set the video duration to match the voice to ensure the whole audio plays.
-    render_duration = mixed_audio.duration
+    render_duration = voice_clip.duration
     video = video.set_duration(render_duration).set_audio(mixed_audio)
 
     canvas_w, canvas_h = 1080, 1920
