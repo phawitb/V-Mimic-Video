@@ -585,9 +585,98 @@ def create_final_tiktok_video(input_vdo, voice_audio, output_path, title_text, s
     final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac", threads=4, logger=None)
     log("✅ Video composition complete.")
 
+
+def create_method2_video(input_vdo, voice_audio, output_path, bg_audio_path=None, log_func=None):
+    """Method 2: content video (top half) + looped avatar video (bottom half), no header/subtitle."""
+    import random, glob
+    def log(m):
+        if log_func: log_func(m)
+        else: print(m)
+
+    AVATARS_DIR = "avartars_no_sound"
+    canvas_w, canvas_h = 1080, 1920
+    half_h = canvas_h // 2  # 960
+
+    # --- Pick random avatar ---
+    avatar_files = glob.glob(os.path.join(AVATARS_DIR, "*.mp4"))
+    if not avatar_files:
+        raise FileNotFoundError(f"No avatar videos found in {AVATARS_DIR}/")
+    avatar_path = random.choice(avatar_files)
+    log(f"🎲 [Method2] Using avatar: {os.path.basename(avatar_path)}")
+
+    # --- Compute bg volume ---
+    log(f"🔍 [Mixer] bg_audio_path = {bg_audio_path}")
+    log(f"🔍 [Mixer] bg_audio exists = {os.path.exists(bg_audio_path) if bg_audio_path else False}")
+
+    bg_vol_factor = 0.0
+    if bg_audio_path and os.path.exists(bg_audio_path):
+        log(f"🔍 [Mixer] bg_audio size = {os.path.getsize(bg_audio_path):,} bytes")
+        voice_rms = measure_active_rms(voice_audio)
+        bg_rms    = measure_rms(bg_audio_path)
+        BG_TARGET_RATIO = 0.40
+        bg_vol_factor = (BG_TARGET_RATIO * voice_rms) / bg_rms if bg_rms > 0 else 0.30
+        bg_vol_factor = max(0.30, min(3.0, bg_vol_factor))
+        log(f"🎬 [Mixer] voice active-RMS={voice_rms:.4f}  bg RMS={bg_rms:.4f}  → bg_vol={bg_vol_factor:.3f}")
+    else:
+        log("⚠️ [Method2] No background audio, using voice only")
+
+    # --- Mix audio with ffmpeg ---
+    ws_dir = os.path.dirname(voice_audio)
+    mixed_audio_path = os.path.join(ws_dir, "mixed_audio_m2.aac")
+    mix_audio_with_ffmpeg(
+        voice_audio,
+        bg_audio_path if bg_vol_factor > 0 else None,
+        mixed_audio_path,
+        bg_vol_factor,
+        log_func=log
+    )
+
+    # --- Load clips ---
+    log("🎬 [Method2] Loading content video...")
+    voice_clip    = AudioFileClip(voice_audio)
+    render_duration = voice_clip.duration
+    mixed_audio   = AudioFileClip(mixed_audio_path)
+
+    content_raw = VideoFileClip(input_vdo).without_audio()
+    content_raw = content_raw.set_duration(render_duration)
+
+    # Resize content to fill 1080 wide, crop to 1080x960
+    content = content_raw.resize(width=canvas_w)
+    if content.h < half_h:
+        content = content_raw.resize(height=half_h)
+    content = content.crop(x_center=content.w / 2, y_center=content.h / 2, width=canvas_w, height=half_h)
+
+    log("🎬 [Method2] Loading & looping avatar video...")
+    avatar_raw = VideoFileClip(avatar_path).without_audio()
+    # Loop avatar to cover full render duration
+    avatar = avatar_raw.loop(duration=render_duration)
+    # Resize avatar to fill 1080 wide, crop to 1080x960
+    avatar = avatar.resize(width=canvas_w)
+    if avatar.h < half_h:
+        avatar = avatar_raw.loop(duration=render_duration).resize(height=half_h)
+    avatar = avatar.crop(x_center=avatar.w / 2, y_center=avatar.h / 2, width=canvas_w, height=half_h)
+    avatar = avatar.set_duration(render_duration)
+
+    # --- Stack vertically ---
+    log("🎬 [Method2] Compositing vertical stack...")
+    bg_black = ColorClip(size=(canvas_w, canvas_h), color=(0, 0, 0)).set_duration(render_duration)
+    final = CompositeVideoClip(
+        [
+            bg_black,
+            content.set_position((0, 0)),
+            avatar.set_position((0, half_h)),
+        ],
+        size=(canvas_w, canvas_h)
+    ).set_audio(mixed_audio)
+
+    log(f"🎬 [Method2] Rendering final MP4: {output_path}...")
+    final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac", threads=4, logger=None)
+    log("✅ Method2 composition complete.")
+
+
 # --- 4. MAIN RUNNER ---
 
-async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=True, progress_callback=None):
+async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=True, video_method=1, progress_callback=None):
     def log(msg):
         print(msg)
         if progress_callback:
@@ -672,27 +761,36 @@ async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=
         if use_voxcpm_tts:
             suffix += "_voxcpm"
 
-        # Step 6: AI Suggestions
-        if is_valid_json(data_json_path):
-            log("⏭️ Step 6: AI suggestions already valid, skipping...")
-            with open(data_json_path, 'r', encoding='utf-8') as f:
-                ai_data = json.load(f)
+        method_suffix = f"_m{video_method}"
+
+        # Step 6: AI Suggestions (only needed for Method 1 which shows title)
+        title_hook = 'สรุปคลิปที่น่าสนใจ'
+        if video_method == 1:
+            if is_valid_json(data_json_path):
+                log("⏭️ Step 6: AI suggestions already valid, skipping...")
+                with open(data_json_path, 'r', encoding='utf-8') as f:
+                    ai_data = json.load(f)
+            else:
+                log("🤖 Step 6: Getting AI Content Suggestions (Ollama/Llama3)...")
+                ai_data = {}
+                for i in range(5):
+                    ai_data = await asyncio.to_thread(get_ollama_suggestions_to_path, thai_sub_path, data_json_path, log_func=log)
+                    is_valid = all(v is not None for v in ai_data.values())
+                    if is_valid: break
+            title_hook = ai_data.get('title_hook', 'สรุปคลิปที่น่าสนใจ')
         else:
-            log("🤖 Step 6: Getting AI Content Suggestions (Ollama/Llama3)...")
-            ai_data = {}
-            for i in range(5):
-                ai_data = await asyncio.to_thread(get_ollama_suggestions_to_path, thai_sub_path, data_json_path, log_func=log)
-                is_valid = all(v is not None for v in ai_data.values())
-                if is_valid: break
+            log("⏭️ Step 6: Skipping AI suggestions (Method 2 has no title)")
 
-        title_hook = ai_data.get('title_hook', 'สรุปคลิปที่น่าสนใจ')
-
-        final_vdo_path = os.path.join(OUTPUT_DIR, f"tk_{ENG_NAME}{suffix}.mp4")
+        final_vdo_path = os.path.join(OUTPUT_DIR, f"tk_{ENG_NAME}{suffix}{method_suffix}.mp4")
         final_json_path = os.path.join(OUTPUT_DIR, f"tk_{ENG_NAME}.json")
 
         # Step 7: Final Composition (always re-render)
-        log("🎬 Step 7: Compositing Final TikTok Layout...")
-        await asyncio.to_thread(create_final_tiktok_video, final_input_vdo, thai_voice_path, final_vdo_path, title_hook, thai_sub_path, bg_audio_path=bg_audio_path, log_func=log)
+        if video_method == 2:
+            log("🎬 Step 7: Compositing Method 2 (split-screen with avatar)...")
+            await asyncio.to_thread(create_method2_video, final_input_vdo, thai_voice_path, final_vdo_path, bg_audio_path=bg_audio_path, log_func=log)
+        else:
+            log("🎬 Step 7: Compositing Method 1 (header + subtitle)...")
+            await asyncio.to_thread(create_final_tiktok_video, final_input_vdo, thai_voice_path, final_vdo_path, title_hook, thai_sub_path, bg_audio_path=bg_audio_path, log_func=log)
 
         if os.path.exists(data_json_path):
             shutil.copy(data_json_path, final_json_path)

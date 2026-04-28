@@ -89,11 +89,13 @@ class AddLinksRequest(BaseModel):
     playlist_name: str
     use_voxcpm_tts: bool = True
     use_anime: bool = True
+    video_method: int = 1
 
 class UpdateJobRequest(BaseModel):
     playlist_name: Optional[str] = None
     use_voxcpm_tts: Optional[bool] = None
     use_anime: Optional[bool] = None
+    video_method: Optional[int] = None
 
 class SettingsRequest(BaseModel):
     start_time: str
@@ -142,6 +144,7 @@ async def add_links(req: AddLinksRequest):
             "playlist_name": req.playlist_name,
             "use_voxcpm_tts": req.use_voxcpm_tts,
             "use_anime": req.use_anime,
+            "video_method": req.video_method,
             "status": "queued",
             "logs": [],
             "created_at": datetime.now().isoformat()
@@ -239,6 +242,7 @@ async def update_job(job_id: str, req: UpdateJobRequest):
     if req.playlist_name is not None: job["playlist_name"] = req.playlist_name
     if req.use_voxcpm_tts is not None: job["use_voxcpm_tts"] = req.use_voxcpm_tts
     if req.use_anime is not None: job["use_anime"] = req.use_anime
+    if req.video_method is not None: job["video_method"] = req.video_method
     state.save_state()
     return job
 
@@ -328,10 +332,11 @@ async def process_next_job():
         # We run the pipeline. Note: if run_pipeline blocks, the loop freezes.
         # We'll rely on its internal awaits or wrap it if needed.
         result = await run_pipeline(
-            job["video_url"], 
-            job["playlist_name"], 
-            job["use_voxcpm_tts"], 
-            job["use_anime"], 
+            job["video_url"],
+            job["playlist_name"],
+            job["use_voxcpm_tts"],
+            job["use_anime"],
+            job.get("video_method", 1),
             progress_callback=progress_callback
         )
         
