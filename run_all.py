@@ -422,6 +422,54 @@ def measure_rms(audio_path, duration=30):
     rms = np.sqrt(np.mean(y ** 2))
     return float(rms)
 
+def measure_active_rms(audio_path, duration=30, top_db=30):
+    """Measure RMS of only the non-silent (active speech) portions of an audio file.
+    This avoids the silence gaps in TTS audio dragging down the RMS value."""
+    y, sr = librosa.load(audio_path, sr=None, mono=True, duration=duration)
+    intervals = librosa.effects.split(y, top_db=top_db)
+    if len(intervals) == 0:
+        return float(np.sqrt(np.mean(y ** 2)))
+    active = np.concatenate([y[s:e] for s, e in intervals])
+    if len(active) == 0:
+        return float(np.sqrt(np.mean(y ** 2)))
+    return float(np.sqrt(np.mean(active ** 2)))
+
+def mix_audio_with_ffmpeg(voice_path, bg_path, output_path, bg_vol, log_func=None):
+    """Mix voice and background audio using ffmpeg directly (more reliable than MoviePy)."""
+    import subprocess
+    def log(m):
+        if log_func: log_func(m)
+        else: print(m)
+
+    if bg_path and os.path.exists(bg_path):
+        # amix: mix voice (full volume) + bg (bg_vol scaled), duration=first (match voice length)
+        # loudnorm on bg to normalize peaks before mixing
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", voice_path,
+            "-i", bg_path,
+            "-filter_complex",
+            f"[1:a]volume={bg_vol:.4f}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[out]",
+            "-map", "[out]",
+            "-acodec", "aac", "-b:a", "192k",
+            output_path
+        ]
+        log(f"🎬 [ffmpeg-mixer] voice + bg (vol={bg_vol:.3f}) → {os.path.basename(output_path)}")
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", voice_path,
+            "-acodec", "aac", "-b:a", "192k",
+            output_path
+        ]
+        log(f"🎬 [ffmpeg-mixer] voice only → {os.path.basename(output_path)}")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg audio mix failed:\n{result.stderr[-500:]}")
+    return output_path
+
+
 def create_final_tiktok_video(input_vdo, voice_audio, output_path, title_text, srt_path, bg_audio_path=None, log_func=None):
     def log(m):
         if log_func: log_func(m)
@@ -430,34 +478,39 @@ def create_final_tiktok_video(input_vdo, voice_audio, output_path, title_text, s
     log("🎬 [Composer] Loading assets...")
     video = VideoFileClip(input_vdo).without_audio()
 
-    # Mix background audio with Thai voice using RMS-based volume balancing
-    audio_clips = []
+    # --- Compute bg volume factor (RMS-normalized) ---
+    log(f"🔍 [Mixer] bg_audio_path = {bg_audio_path}")
+    log(f"🔍 [Mixer] bg_audio exists = {os.path.exists(bg_audio_path) if bg_audio_path else False}")
+
+    bg_vol_factor = 0.0
     if bg_audio_path and os.path.exists(bg_audio_path):
-        voice_rms = measure_rms(voice_audio)
-        bg_rms = measure_rms(bg_audio_path)
+        log(f"🔍 [Mixer] bg_audio size = {os.path.getsize(bg_audio_path):,} bytes")
+        voice_rms = measure_active_rms(voice_audio)
+        bg_rms    = measure_rms(bg_audio_path)
 
-        # Target: bg should be 30% of voice loudness
-        BG_TARGET_RATIO = 0.30
-        if bg_rms > 0:
-            bg_vol = (BG_TARGET_RATIO * voice_rms) / bg_rms
-        else:
-            bg_vol = 0.15
-
-        log(f"🎬 [Mixer] voice RMS={voice_rms:.4f}  bg RMS={bg_rms:.4f}  → bg volume factor={bg_vol:.3f} (target {int(BG_TARGET_RATIO*100)}% of voice)")
-
-        voice_clip = AudioFileClip(voice_audio).volumex(1.0)
-        bg_clip = AudioFileClip(bg_audio_path).volumex(bg_vol)
-        if bg_clip.duration > voice_clip.duration:
-            bg_clip = bg_clip.set_duration(voice_clip.duration)
-        audio_clips = [bg_clip, voice_clip]
+        # Target bg at 40% of active voice loudness (audible but not overwhelming)
+        BG_TARGET_RATIO = 0.40
+        bg_vol_factor = (BG_TARGET_RATIO * voice_rms) / bg_rms if bg_rms > 0 else 0.30
+        # Clamp: at least 0.3 (audible), at most 3.0 (not ear-splitting)
+        bg_vol_factor = max(0.30, min(3.0, bg_vol_factor))
+        log(f"🎬 [Mixer] voice active-RMS={voice_rms:.4f}  bg RMS={bg_rms:.4f}  → bg_vol={bg_vol_factor:.3f}")
     else:
         log("⚠️ [Composer] No background audio found, using voice only")
-        voice_clip = AudioFileClip(voice_audio).volumex(1.0)
-        audio_clips = [voice_clip]
 
-    mixed_audio = CompositeAudioClip(audio_clips)
+    # --- Mix audio with ffmpeg (reliable) ---
+    ws_dir = os.path.dirname(voice_audio)
+    mixed_audio_path = os.path.join(ws_dir, "mixed_audio.aac")
+    mix_audio_with_ffmpeg(
+        voice_audio,
+        bg_audio_path if bg_vol_factor > 0 else None,
+        mixed_audio_path,
+        bg_vol_factor,
+        log_func=log
+    )
 
+    voice_clip = AudioFileClip(voice_audio)
     render_duration = voice_clip.duration
+    mixed_audio = AudioFileClip(mixed_audio_path)
     video = video.set_duration(render_duration).set_audio(mixed_audio)
 
     canvas_w, canvas_h = 1080, 1920
