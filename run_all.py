@@ -510,7 +510,9 @@ def create_final_tiktok_video(input_vdo, voice_audio, output_path, title_text, s
 
     voice_clip = AudioFileClip(voice_audio)
     render_duration = voice_clip.duration
-    mixed_audio = AudioFileClip(mixed_audio_path)
+    # Clamp mixed_audio to render_duration: AAC encoder delay can make the file
+    # slightly shorter than voice, causing MoviePy to loop audio at the end.
+    mixed_audio = AudioFileClip(mixed_audio_path).set_duration(render_duration)
     video = video.set_duration(render_duration).set_audio(mixed_audio)
 
     canvas_w, canvas_h = 1080, 1920
@@ -633,9 +635,11 @@ def create_method2_video(input_vdo, voice_audio, output_path, bg_audio_path=None
 
     # --- Load clips ---
     log("🎬 [Method2] Loading content video...")
-    voice_clip    = AudioFileClip(voice_audio)
+    voice_clip      = AudioFileClip(voice_audio)
     render_duration = voice_clip.duration
-    mixed_audio   = AudioFileClip(mixed_audio_path)
+    # Clamp to render_duration: AAC encoder delay can make duration slightly short,
+    # causing MoviePy to loop audio at the end of the clip.
+    mixed_audio     = AudioFileClip(mixed_audio_path).set_duration(render_duration)
 
     content_raw = VideoFileClip(input_vdo).without_audio()
     content_raw = content_raw.set_duration(render_duration)
