@@ -32,17 +32,18 @@
             const [useVoxcpm, setUseVoxcpm] = useState(true);
             const [useAnime, setUseAnime] = useState(true);
             const [videoMethod, setVideoMethod] = useState(1);
-            
+
             const [startTime, setStartTime] = useState('09:00');
             const [endTime, setEndTime] = useState('23:59');
             const [isEnabled, setIsEnabled] = useState(true);
+            const [editingSettings, setEditingSettings] = useState(false);
+            const [showSaved, setShowSaved] = useState(false);
 
             const [jobs, setJobs] = useState([]);
             const [status, setStatus] = useState({});
             const [expandedJobId, setExpandedJobId] = useState(null);
             const [jobLogs, setJobLogs] = useState([]);
             const [editingJob, setEditingJob] = useState(null);
-            const [showSaved, setShowSaved] = useState(false);
 
             const pollInterval = useRef(null);
             const initialLoad = useRef(true);
@@ -55,11 +56,8 @@
                     ]);
                     const jobsData = await jobsRes.json();
                     const statusData = await statusRes.json();
-                    
                     setJobs(jobsData);
                     setStatus(statusData);
-
-                    // Sync settings inputs with server on first load
                     if (initialLoad.current && statusData.settings) {
                         setStartTime(statusData.settings.start_time);
                         setEndTime(statusData.settings.end_time);
@@ -79,18 +77,12 @@
 
             useEffect(() => {
                 fetchData();
-                pollInterval.current = setInterval(() => {
-                    fetchData();
-                }, 3000);
+                pollInterval.current = setInterval(fetchData, 3000);
                 return () => clearInterval(pollInterval.current);
             }, []);
 
-            // Handle log polling when expanded
             useEffect(() => {
-                if (!expandedJobId) {
-                    setJobLogs([]);
-                    return;
-                }
+                if (!expandedJobId) { setJobLogs([]); return; }
                 fetchLogs(expandedJobId);
                 const logInterval = setInterval(() => fetchLogs(expandedJobId), 2000);
                 return () => clearInterval(logInterval);
@@ -102,11 +94,7 @@
                 await fetch(`${BASE_URL}/links`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        video_urls: urls, playlist_name: playlistName,
-                        use_voxcpm_tts: useVoxcpm, use_anime: useAnime,
-                        video_method: videoMethod
-                    })
+                    body: JSON.stringify({ video_urls: urls, playlist_name: playlistName, use_voxcpm_tts: useVoxcpm, use_anime: useAnime, video_method: videoMethod })
                 });
                 setLinksText('');
                 fetchData();
@@ -114,10 +102,7 @@
 
             const runManual = async (id) => {
                 const res = await fetch(`${BASE_URL}/jobs/${id}/run`, { method: 'POST' });
-                if (!res.ok) {
-                    const err = await res.json();
-                    alert(err.detail);
-                }
+                if (!res.ok) { const err = await res.json(); alert(err.detail); }
                 fetchData();
             };
 
@@ -128,11 +113,7 @@
             };
 
             const updateJob = async (id, data) => {
-                await fetch(`${BASE_URL}/jobs/${id}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
+                await fetch(`${BASE_URL}/jobs/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
                 setEditingJob(null);
                 fetchData();
             };
@@ -143,13 +124,8 @@
                 fetchData();
             };
 
-            const openFolder = async (path) => {
-                await fetch(`${BASE_URL}/open-folder?path=${encodeURIComponent(path)}`);
-            };
-
-            const openFile = async (path) => {
-                await fetch(`${BASE_URL}/open-file?path=${encodeURIComponent(path)}`);
-            };
+            const openFolder = async (path) => { await fetch(`${BASE_URL}/open-folder?path=${encodeURIComponent(path)}`); };
+            const openFile = async (path) => { await fetch(`${BASE_URL}/open-file?path=${encodeURIComponent(path)}`); };
 
             const saveSettings = async () => {
                 await fetch(`${BASE_URL}/settings`, {
@@ -158,83 +134,129 @@
                     body: JSON.stringify({ start_time: startTime, end_time: endTime, is_enabled: isEnabled })
                 });
                 setShowSaved(true);
+                setEditingSettings(false);
                 setTimeout(() => setShowSaved(false), 2000);
                 fetchData();
             };
 
+            const cancelSettings = () => {
+                // restore from server
+                if (status.settings) {
+                    setStartTime(status.settings.start_time);
+                    setEndTime(status.settings.end_time);
+                    setIsEnabled(status.settings.is_enabled);
+                }
+                setEditingSettings(false);
+            };
+
             return (
                 <div className="container mx-auto p-6 max-w-[1400px]">
+                    {/* ── Header ── */}
                     <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
                             <h1 className="text-4xl font-extrabold text-slate-900">Mimic Videos <span className="text-blue-600">Queue Master</span></h1>
                             <p className="text-slate-500 mt-1">Automated Video Production Pipeline</p>
                         </div>
-                        <div className="flex items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-                            <div className="text-right">
-                                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Working Period</div>
-                                <div className="text-sm font-semibold text-slate-700">{status.settings?.start_time} - {status.settings?.end_time}</div>
+
+                        {/* Working Period card — click to edit */}
+                        {editingSettings ? (
+                            <div className="bg-white p-4 rounded-xl shadow-md border border-blue-300 flex flex-col gap-3 min-w-[280px]">
+                                <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">Working Period</div>
+                                <div className="flex gap-2">
+                                    <div className="flex-1">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase">Start</label>
+                                        <input type="text" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-400 outline-none" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase">End</label>
+                                        <input type="text" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-400 outline-none" />
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+                                        <input type="checkbox" checked={isEnabled} onChange={e => setIsEnabled(e.target.checked)} className="w-4 h-4" />
+                                        Enabled
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <button onClick={cancelSettings} className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 text-slate-500 hover:bg-slate-50">Cancel</button>
+                                        <button onClick={saveSettings} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white hover:bg-blue-700">Save</button>
+                                    </div>
+                                </div>
                             </div>
-                            <div className={`w-3 h-3 rounded-full animate-pulse ${status.is_working_now ? 'bg-green-500' : 'bg-amber-500'}`}></div>
-                            <div className="text-sm font-bold uppercase">{status.is_working_now ? 'Working' : 'Sleeping'}</div>
-                        </div>
+                        ) : (
+                            <button onClick={() => setEditingSettings(true)} className="flex items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all text-left">
+                                <div className="text-right">
+                                    <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Working Period</div>
+                                    <div className="text-sm font-semibold text-slate-700">{status.settings?.start_time} – {status.settings?.end_time}</div>
+                                    {showSaved && <div className="text-[10px] text-green-500 font-bold">Saved ✅</div>}
+                                </div>
+                                <div className={`w-3 h-3 rounded-full animate-pulse ${status.is_working_now ? 'bg-green-500' : 'bg-amber-500'}`}></div>
+                                <div className="text-sm font-bold uppercase">{status.is_working_now ? 'Working' : 'Sleeping'}</div>
+                                <div className="text-slate-300 text-lg">✏️</div>
+                            </button>
+                        )}
                     </header>
 
                     <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-                        <div className="xl:col-span-3 space-y-6">
-                            {/* Working Settings */}
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                                <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">Settings</h2>
-                                <div className="space-y-4">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="text-[10px] font-black text-slate-400 uppercase">Start</label>
-                                            <input type="text" value={startTime} onChange={e => setStartTime(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-mono" />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] font-black text-slate-400 uppercase">End</label>
-                                            <input type="text" value={endTime} onChange={e => setEndTime(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-mono" />
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-sm font-medium">Enabled</span>
-                                        <input type="checkbox" checked={isEnabled} onChange={e => setIsEnabled(e.target.checked)} className="w-4 h-4" />
-                                    </div>
-                                    <button onClick={saveSettings} className={`w-full py-2 rounded-lg font-bold text-sm transition-all ${showSaved ? 'bg-green-500 text-white' : 'bg-slate-800 text-white hover:bg-slate-700'}`}>
-                                        {showSaved ? 'Settings Saved! ✅' : 'Save Settings'}
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Add Links */}
+                        {/* ── Add Queue (left panel) ── */}
+                        <div className="xl:col-span-4">
                             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                                 <h2 className="text-lg font-bold text-slate-800 mb-4">Add Queue</h2>
-                                <form onSubmit={submitLinks} className="space-y-4">
-                                    <textarea value={linksText} onChange={e => setLinksText(e.target.value)} className="w-full h-40 p-3 bg-slate-50 border rounded-xl text-xs font-mono resize-none focus:ring-2 focus:ring-blue-500 outline-none" placeholder="URLs (one per line)" required></textarea>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Playlist</label>
-                                        <input type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-semibold" />
-                                    </div>
-                                    <div className="flex gap-4">
-                                        <label className="flex items-center gap-2 text-xs font-bold cursor-pointer"><input type="checkbox" checked={useVoxcpm} onChange={e => setUseVoxcpm(e.target.checked)} /> VoxCPM</label>
-                                        <label className="flex items-center gap-2 text-xs font-bold cursor-pointer"><input type="checkbox" checked={useAnime} onChange={e => setUseAnime(e.target.checked)} /> Anime</label>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Layout Method</label>
-                                        <div className="flex gap-2">
-                                            <button type="button" onClick={() => setVideoMethod(1)} className={`flex-1 py-2 rounded-lg text-xs font-bold border-2 transition-all ${videoMethod === 1 ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-200 text-slate-500 hover:border-blue-300'}`}>
-                                                M1 · Header+Sub
-                                            </button>
-                                            <button type="button" onClick={() => setVideoMethod(2)} className={`flex-1 py-2 rounded-lg text-xs font-bold border-2 transition-all ${videoMethod === 2 ? 'bg-violet-600 border-violet-600 text-white' : 'border-slate-200 text-slate-500 hover:border-violet-300'}`}>
-                                                M2 · Split+Avatar
+                                <form onSubmit={submitLinks}>
+                                    {/* 2-column layout: URLs left, options right */}
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {/* Left: URLs */}
+                                        <div className="flex flex-col">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">URLs</label>
+                                            <textarea
+                                                value={linksText}
+                                                onChange={e => setLinksText(e.target.value)}
+                                                className="flex-1 min-h-[220px] p-3 bg-slate-50 border rounded-xl text-xs font-mono resize-none focus:ring-2 focus:ring-blue-500 outline-none"
+                                                placeholder={"https://tiktok.com/...\nhttps://tiktok.com/..."}
+                                                required
+                                            />
+                                        </div>
+
+                                        {/* Right: options */}
+                                        <div className="flex flex-col gap-3">
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Playlist</label>
+                                                <input type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-semibold mt-0.5 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                            </div>
+
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Options</label>
+                                                <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+                                                    <input type="checkbox" checked={useVoxcpm} onChange={e => setUseVoxcpm(e.target.checked)} /> VoxCPM
+                                                </label>
+                                                <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+                                                    <input type="checkbox" checked={useAnime} onChange={e => setUseAnime(e.target.checked)} /> Anime
+                                                </label>
+                                            </div>
+
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Layout</label>
+                                                <div className="flex flex-col gap-1.5">
+                                                    <button type="button" onClick={() => setVideoMethod(1)} className={`py-2 rounded-lg text-xs font-bold border-2 transition-all ${videoMethod === 1 ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-200 text-slate-500 hover:border-blue-300'}`}>
+                                                        M1 · Header+Sub
+                                                    </button>
+                                                    <button type="button" onClick={() => setVideoMethod(2)} className={`py-2 rounded-lg text-xs font-bold border-2 transition-all ${videoMethod === 2 ? 'bg-violet-600 border-violet-600 text-white' : 'border-slate-200 text-slate-500 hover:border-violet-300'}`}>
+                                                        M2 · Split+Avatar
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <button type="submit" className="mt-auto w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95 text-sm">
+                                                Add to Queue
                                             </button>
                                         </div>
                                     </div>
-                                    <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95">Add to Queue</button>
                                 </form>
                             </div>
                         </div>
 
-                        <div className="xl:col-span-9 space-y-6">
+                        {/* ── Job Table (right panel) ── */}
+                        <div className="xl:col-span-8">
                             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                                 <div className="overflow-x-auto">
                                     <table className="w-full border-collapse table-fixed">
@@ -242,11 +264,11 @@
                                             <tr>
                                                 <th className="px-4 py-3 text-left w-28">Status</th>
                                                 <th className="px-4 py-3 text-left">Video URL</th>
-                                                <th className="px-4 py-3 text-left w-32">Playlist</th>
+                                                <th className="px-4 py-3 text-left w-28">Playlist</th>
                                                 <th className="px-4 py-3 text-center w-16">VoxCPM</th>
                                                 <th className="px-4 py-3 text-center w-16">Anime</th>
                                                 <th className="px-4 py-3 text-center w-20">Method</th>
-                                                <th className="px-4 py-3 text-right w-64">Actions</th>
+                                                <th className="px-4 py-3 text-right w-56">Actions</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
@@ -263,7 +285,7 @@
                                                                 {job.status} {expandedJobId === job.id ? '▲' : '▼'}
                                                             </button>
                                                         </td>
-                                                        <td className="px-4 py-4 min-w-[200px]">
+                                                        <td className="px-4 py-4 min-w-[160px]">
                                                             <div className="text-xs font-medium text-slate-800 line-clamp-1" title={job.video_url}>{job.video_url}</div>
                                                         </td>
                                                         <td className="px-4 py-4">
@@ -304,10 +326,10 @@
                                                                 <button onClick={() => interruptJob(job.id)} className="bg-red-500 text-white px-2 py-1 rounded font-black text-[10px] uppercase hover:bg-red-600">Interrupt</button>
                                                             )}
                                                             {job.status === 'completed' && job.video_url_path && (
-                                                                <button onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)} className="btn-view">View Video</button>
+                                                                <button onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)} className="btn-view">View</button>
                                                             )}
                                                             {job.status !== 'processing' && (
-                                                                <button onClick={() => runManual(job.id)} className="text-orange-500 font-black text-[10px] uppercase hover:underline">Run Now</button>
+                                                                <button onClick={() => runManual(job.id)} className="text-orange-500 font-black text-[10px] uppercase hover:underline">Run</button>
                                                             )}
                                                             {job.status === 'queued' && (
                                                                 editingJob?.id === job.id ? (
@@ -336,22 +358,15 @@
                                                                                 {job.video_full_path || job.video_url_path}
                                                                             </div>
                                                                             <div className="flex gap-2">
-                                                                                <button 
-                                                                                    onClick={() => openFile(job.video_full_path || job.video_url_path)}
-                                                                                    className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap flex items-center gap-2"
-                                                                                >
+                                                                                <button onClick={() => openFile(job.video_full_path || job.video_url_path)} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap">
                                                                                     ▶️ Open Video
                                                                                 </button>
-                                                                                <button 
-                                                                                    onClick={() => openFolder(job.video_full_path || job.video_url_path)}
-                                                                                    className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap flex items-center gap-2"
-                                                                                >
-                                                                                    📁 Open Output Folder
+                                                                                <button onClick={() => openFolder(job.video_full_path || job.video_url_path)} className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-lg text-sm font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap">
+                                                                                    📁 Open Folder
                                                                                 </button>
                                                                             </div>
                                                                         </div>
                                                                     )}
-
                                                                     <div className="log-container p-4 rounded-xl border border-slate-800">
                                                                         <div className="flex justify-between mb-4 border-b border-slate-800 pb-2">
                                                                             <span className="text-xs font-black text-slate-500 uppercase tracking-widest">Execution Logs</span>
