@@ -589,7 +589,7 @@ def create_final_tiktok_video(input_vdo, voice_audio, output_path, title_text, s
 
 
 def create_method2_video(input_vdo, voice_audio, output_path, bg_audio_path=None, log_func=None):
-    """Method 2: content video (top half) + looped avatar video (bottom half), no header/subtitle."""
+    """Method 2: content video (top half) + looped avatar video (bottom half), vertical split."""
     import random, glob
     def log(m):
         if log_func: log_func(m)
@@ -599,32 +599,56 @@ def create_method2_video(input_vdo, voice_audio, output_path, bg_audio_path=None
     canvas_w, canvas_h = 1080, 1920
     half_h = canvas_h // 2  # 960
 
-    # --- Pick random avatar ---
     avatar_files = glob.glob(os.path.join(AVATARS_DIR, "*.mp4"))
     if not avatar_files:
         raise FileNotFoundError(f"No avatar videos found in {AVATARS_DIR}/")
     avatar_path = random.choice(avatar_files)
     log(f"🎲 [Method2] Using avatar: {os.path.basename(avatar_path)}")
 
-    # --- Compute bg volume ---
+    ws_dir = os.path.dirname(voice_audio)
+    render_duration, mixed_audio = _prepare_avatar_audio(voice_audio, bg_audio_path, ws_dir, "m2", log)
+
+    log("🎬 [Method2] Loading content video...")
+    content_raw = VideoFileClip(input_vdo).without_audio().set_duration(render_duration)
+    # Fit content into 1080 x 960 (top half)
+    if content_raw.w / content_raw.h < canvas_w / half_h:
+        content = content_raw.resize(width=canvas_w)
+    else:
+        content = content_raw.resize(height=half_h)
+    content = content.crop(x_center=content.w / 2, y_center=content.h / 2, width=canvas_w, height=half_h)
+    content = content.set_duration(render_duration)
+
+    log("🎬 [Method2] Loading & looping avatar video...")
+    avatar = _pick_and_loop_avatar(avatar_path, render_duration, canvas_w, half_h)
+
+    log("🎬 [Method2] Compositing vertical stack...")
+    bg_black = ColorClip(size=(canvas_w, canvas_h), color=(0, 0, 0)).set_duration(render_duration)
+    final = CompositeVideoClip(
+        [bg_black, content.set_position((0, 0)), avatar.set_position((0, half_h))],
+        size=(canvas_w, canvas_h)
+    ).set_audio(mixed_audio)
+
+    log(f"🎬 [Method2] Rendering final MP4: {output_path}...")
+    final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac", threads=4, logger=None)
+    log("✅ Method2 composition complete.")
+
+
+def _prepare_avatar_audio(voice_audio, bg_audio_path, ws_dir, suffix, log):
+    """Shared helper: compute bg_vol, mix audio with ffmpeg, return (render_duration, mixed_audio)."""
+    bg_vol_factor = 0.0
     log(f"🔍 [Mixer] bg_audio_path = {bg_audio_path}")
     log(f"🔍 [Mixer] bg_audio exists = {os.path.exists(bg_audio_path) if bg_audio_path else False}")
-
-    bg_vol_factor = 0.0
     if bg_audio_path and os.path.exists(bg_audio_path):
         log(f"🔍 [Mixer] bg_audio size = {os.path.getsize(bg_audio_path):,} bytes")
         voice_rms = measure_active_rms(voice_audio)
         bg_rms    = measure_rms(bg_audio_path)
-        BG_TARGET_RATIO = 0.40
-        bg_vol_factor = (BG_TARGET_RATIO * voice_rms) / bg_rms if bg_rms > 0 else 0.30
+        bg_vol_factor = (0.40 * voice_rms) / bg_rms if bg_rms > 0 else 0.30
         bg_vol_factor = max(0.30, min(3.0, bg_vol_factor))
         log(f"🎬 [Mixer] voice active-RMS={voice_rms:.4f}  bg RMS={bg_rms:.4f}  → bg_vol={bg_vol_factor:.3f}")
     else:
-        log("⚠️ [Method2] No background audio, using voice only")
+        log(f"⚠️ No background audio, using voice only")
 
-    # --- Mix audio with ffmpeg ---
-    ws_dir = os.path.dirname(voice_audio)
-    mixed_audio_path = os.path.join(ws_dir, "mixed_audio_m2.aac")
+    mixed_audio_path = os.path.join(ws_dir, f"mixed_audio_{suffix}.aac")
     mix_audio_with_ffmpeg(
         voice_audio,
         bg_audio_path if bg_vol_factor > 0 else None,
@@ -632,50 +656,72 @@ def create_method2_video(input_vdo, voice_audio, output_path, bg_audio_path=None
         bg_vol_factor,
         log_func=log
     )
-
-    # --- Load clips ---
-    log("🎬 [Method2] Loading content video...")
     voice_clip      = AudioFileClip(voice_audio)
     render_duration = voice_clip.duration
-    # Clamp to render_duration: AAC encoder delay can make duration slightly short,
-    # causing MoviePy to loop audio at the end of the clip.
     mixed_audio     = AudioFileClip(mixed_audio_path).set_duration(render_duration)
+    return render_duration, mixed_audio
 
-    content_raw = VideoFileClip(input_vdo).without_audio()
-    content_raw = content_raw.set_duration(render_duration)
 
-    # Resize content to fill 1080 wide, crop to 1080x960
-    content = content_raw.resize(width=canvas_w)
-    if content.h < half_h:
-        content = content_raw.resize(height=half_h)
-    content = content.crop(x_center=content.w / 2, y_center=content.h / 2, width=canvas_w, height=half_h)
+def _pick_and_loop_avatar(avatar_path, render_duration, target_w, target_h):
+    """Resize and loop an avatar clip to exactly target_w x target_h x render_duration."""
+    raw = VideoFileClip(avatar_path).without_audio()
+    looped = raw.loop(duration=render_duration)
+    # Fill target width first, then crop height (or vice versa)
+    if looped.w / looped.h < target_w / target_h:
+        looped = looped.resize(width=target_w)
+    else:
+        looped = looped.resize(height=target_h)
+    looped = looped.crop(x_center=looped.w / 2, y_center=looped.h / 2, width=target_w, height=target_h)
+    return looped.set_duration(render_duration)
 
-    log("🎬 [Method2] Loading & looping avatar video...")
-    avatar_raw = VideoFileClip(avatar_path).without_audio()
-    # Loop avatar to cover full render duration
-    avatar = avatar_raw.loop(duration=render_duration)
-    # Resize avatar to fill 1080 wide, crop to 1080x960
-    avatar = avatar.resize(width=canvas_w)
-    if avatar.h < half_h:
-        avatar = avatar_raw.loop(duration=render_duration).resize(height=half_h)
-    avatar = avatar.crop(x_center=avatar.w / 2, y_center=avatar.h / 2, width=canvas_w, height=half_h)
-    avatar = avatar.set_duration(render_duration)
 
-    # --- Stack vertically ---
-    log("🎬 [Method2] Compositing vertical stack...")
+def create_method3_video(input_vdo, voice_audio, output_path, bg_audio_path=None, log_func=None):
+    """Method 3: content video (left half) + looped avatar (right half), horizontal split."""
+    import random, glob
+    def log(m):
+        if log_func: log_func(m)
+        else: print(m)
+
+    AVATARS_DIR = "avartars_no_sound"
+    canvas_w, canvas_h = 1080, 1920
+    half_w = canvas_w // 2  # 540
+
+    avatar_files = glob.glob(os.path.join(AVATARS_DIR, "*.mp4"))
+    if not avatar_files:
+        raise FileNotFoundError(f"No avatar videos found in {AVATARS_DIR}/")
+    avatar_path = random.choice(avatar_files)
+    log(f"🎲 [Method3] Using avatar: {os.path.basename(avatar_path)}")
+
+    ws_dir = os.path.dirname(voice_audio)
+    render_duration, mixed_audio = _prepare_avatar_audio(voice_audio, bg_audio_path, ws_dir, "m3", log)
+
+    log("🎬 [Method3] Loading content video...")
+    content_raw = VideoFileClip(input_vdo).without_audio().set_duration(render_duration)
+    # Fit content into 540 x 1920 (left half)
+    if content_raw.w / content_raw.h < half_w / canvas_h:
+        content = content_raw.resize(width=half_w)
+    else:
+        content = content_raw.resize(height=canvas_h)
+    content = content.crop(x_center=content.w / 2, y_center=content.h / 2, width=half_w, height=canvas_h)
+    content = content.set_duration(render_duration)
+
+    log("🎬 [Method3] Loading & looping avatar video...")
+    avatar = _pick_and_loop_avatar(avatar_path, render_duration, half_w, canvas_h)
+
+    log("🎬 [Method3] Compositing horizontal split...")
     bg_black = ColorClip(size=(canvas_w, canvas_h), color=(0, 0, 0)).set_duration(render_duration)
     final = CompositeVideoClip(
         [
             bg_black,
             content.set_position((0, 0)),
-            avatar.set_position((0, half_h)),
+            avatar.set_position((half_w, 0)),
         ],
         size=(canvas_w, canvas_h)
     ).set_audio(mixed_audio)
 
-    log(f"🎬 [Method2] Rendering final MP4: {output_path}...")
+    log(f"🎬 [Method3] Rendering final MP4: {output_path}...")
     final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac", threads=4, logger=None)
-    log("✅ Method2 composition complete.")
+    log("✅ Method3 composition complete.")
 
 
 # --- 4. MAIN RUNNER ---
@@ -783,15 +829,18 @@ async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=
                     if is_valid: break
             title_hook = ai_data.get('title_hook', 'สรุปคลิปที่น่าสนใจ')
         else:
-            log("⏭️ Step 6: Skipping AI suggestions (Method 2 has no title)")
+            log(f"⏭️ Step 6: Skipping AI suggestions (Method {video_method} has no title)")
 
         final_vdo_path = os.path.join(OUTPUT_DIR, f"tk_{ENG_NAME}{suffix}{method_suffix}.mp4")
         final_json_path = os.path.join(OUTPUT_DIR, f"tk_{ENG_NAME}.json")
 
         # Step 7: Final Composition (always re-render)
         if video_method == 2:
-            log("🎬 Step 7: Compositing Method 2 (split-screen with avatar)...")
+            log("🎬 Step 7: Compositing Method 2 (vertical split + avatar)...")
             await asyncio.to_thread(create_method2_video, final_input_vdo, thai_voice_path, final_vdo_path, bg_audio_path=bg_audio_path, log_func=log)
+        elif video_method == 3:
+            log("🎬 Step 7: Compositing Method 3 (horizontal split + avatar)...")
+            await asyncio.to_thread(create_method3_video, final_input_vdo, thai_voice_path, final_vdo_path, bg_audio_path=bg_audio_path, log_func=log)
         else:
             log("🎬 Step 7: Compositing Method 1 (header + subtitle)...")
             await asyncio.to_thread(create_final_tiktok_video, final_input_vdo, thai_voice_path, final_vdo_path, title_hook, thai_sub_path, bg_audio_path=bg_audio_path, log_func=log)
