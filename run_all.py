@@ -1022,8 +1022,10 @@ def generate_title_and_hashtags(srt_path, input_lang='en', output_lang='th', log
     return default
 
 
-def extract_vocab_with_ollama(src_srt_path, input_lang='en', output_lang='th', log_func=None):
-    """Extract 5-8 difficult vocabulary words that MUST appear in the episode subtitle.
+def extract_vocab_with_ollama(src_srt_path, input_lang='en', output_lang='th',
+                              clip_duration_sec=0, log_func=None):
+    """Extract vocabulary words that MUST appear in the episode subtitle.
+    Count depends on clip duration: <2 min → 6, >=2 min → 8, >=5 min → 12.
     Each word is validated against the actual SRT text. Retries if too few words pass."""
     import re as _re
     LANG_NAMES = {'en': 'English', 'fi': 'Finnish', 'th': 'Thai'}
@@ -1033,7 +1035,17 @@ def extract_vocab_with_ollama(src_srt_path, input_lang='en', output_lang='th', l
 
     in_name  = LANG_NAMES.get(input_lang, input_lang)
     out_name = LANG_NAMES.get(output_lang, output_lang)
-    log(f"🤖 [Vocab-M4] Extracting {in_name} vocab → {out_name} translation...")
+
+    # Dynamic vocab count based on clip duration
+    if clip_duration_sec >= 300:   # >= 5 min
+        min_words, max_words = 10, 12
+    elif clip_duration_sec >= 120: # >= 2 min
+        min_words, max_words = 8, 10
+    else:                          # < 2 min
+        min_words, max_words = 6, 8
+
+    log(f"🤖 [Vocab-M4] Extracting {in_name} vocab → {out_name} translation... "
+        f"(target {min_words}–{max_words} words, clip={clip_duration_sec:.0f}s)")
 
     if not os.path.exists(src_srt_path):
         log("⚠️ [Vocab-M4] Source SRT not found, returning empty list")
@@ -1071,7 +1083,7 @@ def extract_vocab_with_ollama(src_srt_path, input_lang='en', output_lang='th', l
 
     def _ask_ollama(extra_instruction=""):
         prompt = (
-            f"You are a language teacher. Choose 5-8 difficult or advanced {in_name} vocabulary words "
+            f"You are a language teacher. Choose {min_words}-{max_words} difficult or advanced {in_name} vocabulary words "
             f"FROM THE TEXT BELOW that would be worth teaching to learners. "
             f"IMPORTANT: every word you choose MUST appear verbatim in the text (exact spelling, any case). "
             f"Avoid very common/basic words. {extra_instruction}\n\n"
@@ -1109,11 +1121,11 @@ def extract_vocab_with_ollama(src_srt_path, input_lang='en', output_lang='th', l
                 vocab.append(e)
                 seen.add(e['word'].lower())
 
-        if len(vocab) >= 5:
+        if len(vocab) >= min_words:
             break
         log(f"   🔄 Only {len(vocab)} valid words so far, retrying ({attempt+1}/3)...")
 
-    vocab = vocab[:8]
+    vocab = vocab[:max_words]
     log(f"✅ [Vocab-M4] {len(vocab)} validated words ({in_name}→{out_name})")
 
     # Fill any missing translations via deep_translator
@@ -1348,8 +1360,8 @@ def _create_m4_vocab_image(vocab_list, width, height, src_lang='en', dst_lang='t
 
 def _draw_cover_title(frame_rgb, title, max_w_ratio=0.88, base_font_size=80):
     """Draw a centered, word-wrapped title over the frame.
-    Each line gets a semi-transparent black rounded-rectangle background pill.
-    White text with thin black outline on top."""
+    Each line gets a solid black rounded-rectangle background pill.
+    White text with thin black outline on top, text is centered within the pill."""
     img = Image.fromarray(frame_rgb.copy())
     fw, fh = img.size
     max_w = int(fw * max_w_ratio)
@@ -1366,47 +1378,57 @@ def _draw_cover_title(frame_rgb, title, max_w_ratio=0.88, base_font_size=80):
         ):
             break
 
-    # Measure each line
+    # Measure each line's glyph bounding box
     tmp_draw = ImageDraw.Draw(img)
-    bbs  = [tmp_draw.textbbox((0, 0), ln, font=font) for ln in lines]
-    lws  = [b[2] - b[0] for b in bbs]
-    lhs  = [b[3] - b[1] for b in bbs]
-    gap  = max(10, fsize // 7)
-    total_h = sum(lhs) + gap * (len(lines) - 1)
+    bbs = [tmp_draw.textbbox((0, 0), ln, font=font) for ln in lines]
+    lws = [b[2] - b[0] for b in bbs]   # glyph pixel width
+    lhs = [b[3] - b[1] for b in bbs]   # glyph pixel height
 
-    pad_x = max(20, fsize // 3)   # horizontal padding inside pill
-    pad_y = max(10, fsize // 6)   # vertical padding inside pill
-    radius = max(16, fsize // 3)  # corner radius
+    pad_x  = max(24, fsize // 2)        # horizontal padding inside pill
+    pad_y  = max(16, fsize // 4)        # vertical padding inside pill
+    gap    = max(10, fsize // 8)        # gap between pills
+    radius = max(16, fsize // 3)        # corner radius
 
-    # Build RGBA overlay for all pill backgrounds at once
+    # Total block height: each pill = glyph_h + 2*pad_y, separated by gap
+    pill_hs = [lh + 2 * pad_y for lh in lhs]
+    total_h = sum(pill_hs) + gap * max(0, len(lines) - 1)
+
+    # Build RGBA overlay for all pill backgrounds
     overlay = Image.new('RGBA', (fw, fh), (0, 0, 0, 0))
     ov_draw = ImageDraw.Draw(overlay)
 
-    y = (fh - total_h) // 2
+    pill_y = (fh - total_h) // 2   # top of first pill
     pill_rects = []
     for i, line in enumerate(lines):
-        lx = (fw - lws[i]) // 2 - bbs[i][0]
-        ly = y - bbs[i][1]
-        rx1 = lx - pad_x
-        ry1 = ly - pad_y
-        rx2 = lx + lws[i] + pad_x
-        ry2 = ly + lhs[i] + pad_y
-        ov_draw.rounded_rectangle([rx1, ry1, rx2, ry2], radius=radius, fill=(0, 0, 0, 185))
-        pill_rects.append((lx, ly, line))
-        y += lhs[i] + gap
+        # Pill rect — exactly wraps the glyph bbox + padding on all four sides
+        pill_x1 = (fw - lws[i]) // 2 - pad_x
+        pill_y1 = pill_y
+        pill_x2 = (fw - lws[i]) // 2 + lws[i] + pad_x
+        pill_y2 = pill_y + pill_hs[i]
+        ov_draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2],
+                                   radius=radius, fill=(0, 0, 0, 255))
 
-    # Composite pill backgrounds onto frame
+        # Text draw origin: glyph top-left lands at (pill_x1+pad_x, pill_y1+pad_y)
+        text_left = (fw - lws[i]) // 2
+        text_top  = pill_y + pad_y
+        draw_x = text_left - bbs[i][0]
+        draw_y = text_top  - bbs[i][1]
+        pill_rects.append((draw_x, draw_y, line))
+
+        pill_y += pill_hs[i] + gap
+
+    # Composite solid pill backgrounds onto frame
     img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
     draw = ImageDraw.Draw(img)
 
     # Draw text: thin black outline then white fill
     outline = max(1, fsize // 30)
-    for lx, ly, line in pill_rects:
+    for draw_x, draw_y, line in pill_rects:
         for dx in range(-outline, outline + 1):
             for dy in range(-outline, outline + 1):
                 if dx != 0 or dy != 0:
-                    draw.text((lx + dx, ly + dy), line, fill=(0, 0, 0), font=font)
-        draw.text((lx, ly), line, fill=(255, 255, 255), font=font)
+                    draw.text((draw_x + dx, draw_y + dy), line, fill=(0, 0, 0), font=font)
+        draw.text((draw_x, draw_y), line, fill=(255, 255, 255), font=font)
 
     return np.array(img)
 
@@ -1517,18 +1539,24 @@ def create_method4_video(input_vdo, output_path, src_srt_path, dst_srt_path, voc
         if start_t >= render_duration or dur < 0.02:
             continue
 
-        # Find the largest font size where both src and dst fit in MAX_LINES lines
+        # Find the largest font size where both src and dst truly fit in MAX_LINES lines.
+        # IMPORTANT: measure with max_lines=99 so the wrap count reflects the real line count,
+        # not the capped result (which would always be ≤ 2 and never trigger a shrink).
         fs_src, fs_dst = BASE_SRC, BASE_DST
-        for shrink in range(0, BASE_SRC - 18, 2):   # try down to size ~34
+        src_lines, dst_lines = [], []
+        for shrink in range(0, BASE_SRC - 18, 2):   # 52→20 in steps of 2
             fs_src = BASE_SRC - shrink
             fs_dst = BASE_DST - shrink
             f_src = _font_for_lang(input_lang,  fs_src)
             f_dst = _font_for_lang(output_lang, fs_dst)
-            src_lines = _wrap_for_lang(input_lang,  src_text, f_src, _draw, max_w)
-            dst_lines = (_wrap_for_lang(output_lang, dst_text, f_dst, _draw, max_w)
-                         if dst_text else [])
-            if len(src_lines) <= MAX_LINES and len(dst_lines) <= MAX_LINES:
-                break   # fits — use this size
+            # Measure without cap to get true line count
+            src_all = _wrap_for_lang(input_lang,  src_text, f_src, _draw, max_w, max_lines=99)
+            dst_all = (_wrap_for_lang(output_lang, dst_text, f_dst, _draw, max_w, max_lines=99)
+                       if dst_text else [])
+            src_lines = src_all[:MAX_LINES]
+            dst_lines = dst_all[:MAX_LINES]
+            if len(src_all) <= MAX_LINES and len(dst_all) <= MAX_LINES:
+                break   # text truly fits at this font size
 
         bar_np = np.array(_render_m4_subtitle_bar(src_lines, dst_lines, highlight_words,
                                                    sub_w, SLOT_H,
@@ -1813,9 +1841,10 @@ async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=
                         vocab_list = json.load(f)
                 else:
                     log("🤖 Step 6b: Extracting vocabulary for M4 (episode-specific)...")
+                    ep_dur_sec = (ep_end - ep_start) if ep_end > ep_start else 0
                     vocab_list = await asyncio.to_thread(extract_vocab_with_ollama, ep_eng_sub,
                                                          input_lang=input_lang, output_lang=output_lang,
-                                                         log_func=log)
+                                                         clip_duration_sec=ep_dur_sec, log_func=log)
                     with open(ep_vocab_json, 'w', encoding='utf-8') as f:
                         json.dump(vocab_list, f, ensure_ascii=False, indent=2)
 
