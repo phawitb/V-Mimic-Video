@@ -26,12 +26,23 @@
         const { useState, useEffect, useRef } = React;
         const BASE_URL = 'http://localhost:8123';
 
+        const LANGUAGES = [
+            { code: 'en', label: 'English' },
+            { code: 'fi', label: 'Finnish' },
+            { code: 'th', label: 'Thai' },
+        ];
+        const LANG_LABEL = Object.fromEntries(LANGUAGES.map(l => [l.code, l.label]));
+
         function App() {
             const [linksText, setLinksText] = useState('');
             const [playlistName, setPlaylistName] = useState('spoil_movie');
             const [useVoxcpm, setUseVoxcpm] = useState(true);
             const [useAnime, setUseAnime] = useState(true);
             const [videoMethod, setVideoMethod] = useState(1);
+            const [inputLang, setInputLang] = useState('en');
+            const [outputLang, setOutputLang] = useState('th');
+            const [videoSize, setVideoSize] = useState('tiktok');
+            const [maxLength, setMaxLength] = useState(0);
 
             const [startTime, setStartTime] = useState('09:00');
             const [endTime, setEndTime] = useState('23:59');
@@ -94,7 +105,7 @@
                 await fetch(`${BASE_URL}/links`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ video_urls: urls, playlist_name: playlistName, use_voxcpm_tts: useVoxcpm, use_anime: useAnime, video_method: videoMethod })
+                    body: JSON.stringify({ video_urls: urls, playlist_name: playlistName, use_voxcpm_tts: useVoxcpm, use_anime: useAnime, video_method: videoMethod, input_lang: inputLang, output_lang: outputLang, video_size: videoSize, max_length: maxLength })
                 });
                 setLinksText('');
                 fetchData();
@@ -223,15 +234,52 @@
                                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Playlist</label>
                                                 <input type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-semibold mt-0.5 focus:ring-2 focus:ring-blue-500 outline-none" />
                                             </div>
+                                            <div>
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Max Length (sec)</label>
+                                                <div className="flex items-center gap-2 mt-0.5">
+                                                    <input type="number" min="0" value={maxLength || ''} onChange={e => setMaxLength(parseInt(e.target.value) || 0)} placeholder="0 = unlimited" className="flex-1 p-2 bg-slate-50 border rounded-lg text-sm font-mono focus:ring-2 focus:ring-orange-400 outline-none" />
+                                                    {maxLength > 0 && <span className="text-[10px] font-black text-orange-500 uppercase whitespace-nowrap">{maxLength}s</span>}
+                                                </div>
+                                            </div>
 
                                             <div className="flex flex-col gap-1.5">
                                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Options</label>
-                                                <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
-                                                    <input type="checkbox" checked={useVoxcpm} onChange={e => setUseVoxcpm(e.target.checked)} /> VoxCPM
-                                                </label>
+                                                {videoMethod !== 4 && (
+                                                    <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+                                                        <input type="checkbox" checked={useVoxcpm} onChange={e => setUseVoxcpm(e.target.checked)} /> VoxCPM
+                                                    </label>
+                                                )}
                                                 <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
                                                     <input type="checkbox" checked={useAnime} onChange={e => setUseAnime(e.target.checked)} /> Anime
                                                 </label>
+                                                {videoMethod === 4 && (
+                                                    <div className="flex flex-col gap-1 mt-1 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+                                                        <div className="text-[10px] font-black text-amber-600 uppercase tracking-widest mb-0.5">M4 Options</div>
+                                                        <div>
+                                                            <div className="text-[10px] text-slate-400 font-bold uppercase">Input (video lang)</div>
+                                                            <select value={inputLang} onChange={e => setInputLang(e.target.value)} className="w-full p-1 bg-white border border-amber-200 rounded text-xs font-semibold mt-0.5 outline-none focus:ring-1 focus:ring-amber-400">
+                                                                {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] text-slate-400 font-bold uppercase">Output (subtitle lang)</div>
+                                                            <select value={outputLang} onChange={e => setOutputLang(e.target.value)} className="w-full p-1 bg-white border border-amber-200 rounded text-xs font-semibold mt-0.5 outline-none focus:ring-1 focus:ring-amber-400">
+                                                                {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] text-slate-400 font-bold uppercase">Output Size</div>
+                                                            <div className="flex gap-1 mt-0.5">
+                                                                <button type="button" onClick={() => setVideoSize('tiktok')} className={`flex-1 py-1 rounded text-[10px] font-black border transition-all ${videoSize === 'tiktok' ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-200 text-slate-500 hover:border-amber-300'}`}>
+                                                                    TikTok<br/><span className="font-normal opacity-70">9:16</span>
+                                                                </button>
+                                                                <button type="button" onClick={() => setVideoSize('youtube')} className={`flex-1 py-1 rounded text-[10px] font-black border transition-all ${videoSize === 'youtube' ? 'bg-red-500 border-red-500 text-white' : 'border-slate-200 text-slate-500 hover:border-red-300'}`}>
+                                                                    YouTube<br/><span className="font-normal opacity-70">16:9</span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
 
                                             <div>
@@ -245,6 +293,9 @@
                                                     </button>
                                                     <button type="button" onClick={() => setVideoMethod(3)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 3 ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-200 text-slate-500 hover:border-emerald-300'}`}>
                                                         M3<br/><span className="font-normal">↔ Split</span>
+                                                    </button>
+                                                    <button type="button" onClick={() => setVideoMethod(4)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 4 ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-200 text-slate-500 hover:border-amber-300'}`}>
+                                                        M4<br/><span className="font-normal">Vocab</span>
                                                     </button>
                                                 </div>
                                             </div>
@@ -299,10 +350,25 @@
                                                             )}
                                                         </td>
                                                         <td className="px-4 py-4 text-center">
-                                                            {editingJob?.id === job.id ? (
-                                                                <input type="checkbox" checked={editingJob.use_voxcpm_tts} onChange={e => setEditingJob({...editingJob, use_voxcpm_tts: e.target.checked})} />
+                                                            {job.video_method === 4 ? (
+                                                                editingJob?.id === job.id ? (
+                                                                    <div className="flex flex-col gap-1 items-center">
+                                                                        <select value={editingJob.input_lang || 'en'} onChange={e => setEditingJob({...editingJob, input_lang: e.target.value})} className="p-0.5 border rounded text-[10px] w-14">
+                                                                            {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label.slice(0,2).toUpperCase()}</option>)}
+                                                                        </select>
+                                                                        <select value={editingJob.output_lang || 'th'} onChange={e => setEditingJob({...editingJob, output_lang: e.target.value})} className="p-0.5 border rounded text-[10px] w-14">
+                                                                            {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label.slice(0,2).toUpperCase()}</option>)}
+                                                                        </select>
+                                                                    </div>
+                                                                ) : (
+                                                                    <span className="text-[10px] font-black text-amber-600 uppercase">{(job.input_lang||'en').toUpperCase()}→{(job.output_lang||'th').toUpperCase()}</span>
+                                                                )
                                                             ) : (
-                                                                <div className={`w-2 h-2 rounded-full mx-auto ${job.use_voxcpm_tts ? 'bg-blue-500' : 'bg-slate-200'}`}></div>
+                                                                editingJob?.id === job.id ? (
+                                                                    <input type="checkbox" checked={editingJob.use_voxcpm_tts} onChange={e => setEditingJob({...editingJob, use_voxcpm_tts: e.target.checked})} />
+                                                                ) : (
+                                                                    <div className={`w-2 h-2 rounded-full mx-auto ${job.use_voxcpm_tts ? 'bg-blue-500' : 'bg-slate-200'}`}></div>
+                                                                )
                                                             )}
                                                         </td>
                                                         <td className="px-4 py-4 text-center">
@@ -318,11 +384,13 @@
                                                                     <button type="button" onClick={() => setEditingJob({...editingJob, video_method: 1})} className={`px-1.5 py-1 rounded text-[10px] font-black border ${(editingJob.video_method || 1) === 1 ? 'bg-blue-600 text-white border-blue-600' : 'border-slate-300 text-slate-400'}`}>M1</button>
                                                                     <button type="button" onClick={() => setEditingJob({...editingJob, video_method: 2})} className={`px-1.5 py-1 rounded text-[10px] font-black border ${editingJob.video_method === 2 ? 'bg-violet-600 text-white border-violet-600' : 'border-slate-300 text-slate-400'}`}>M2</button>
                                                                     <button type="button" onClick={() => setEditingJob({...editingJob, video_method: 3})} className={`px-1.5 py-1 rounded text-[10px] font-black border ${editingJob.video_method === 3 ? 'bg-emerald-600 text-white border-emerald-600' : 'border-slate-300 text-slate-400'}`}>M3</button>
+                                                                    <button type="button" onClick={() => setEditingJob({...editingJob, video_method: 4})} className={`px-1.5 py-1 rounded text-[10px] font-black border ${editingJob.video_method === 4 ? 'bg-amber-500 text-white border-amber-500' : 'border-slate-300 text-slate-400'}`}>M4</button>
                                                                 </div>
                                                             ) : (
                                                                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
                                                                     job.video_method === 2 ? 'bg-violet-100 text-violet-700' :
                                                                     job.video_method === 3 ? 'bg-emerald-100 text-emerald-700' :
+                                                                    job.video_method === 4 ? 'bg-amber-100 text-amber-700' :
                                                                     'bg-blue-100 text-blue-700'
                                                                 }`}>
                                                                     M{job.video_method || 1}

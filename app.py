@@ -90,12 +90,20 @@ class AddLinksRequest(BaseModel):
     use_voxcpm_tts: bool = True
     use_anime: bool = True
     video_method: int = 1
+    input_lang: str = 'en'
+    output_lang: str = 'th'
+    video_size: str = 'tiktok'
+    max_length: int = 0
 
 class UpdateJobRequest(BaseModel):
     playlist_name: Optional[str] = None
     use_voxcpm_tts: Optional[bool] = None
     use_anime: Optional[bool] = None
     video_method: Optional[int] = None
+    input_lang: Optional[str] = None
+    output_lang: Optional[str] = None
+    video_size: Optional[str] = None
+    max_length: Optional[int] = None
 
 class SettingsRequest(BaseModel):
     start_time: str
@@ -145,6 +153,10 @@ async def add_links(req: AddLinksRequest):
             "use_voxcpm_tts": req.use_voxcpm_tts,
             "use_anime": req.use_anime,
             "video_method": req.video_method,
+            "input_lang": req.input_lang,
+            "output_lang": req.output_lang,
+            "video_size": req.video_size,
+            "max_length": req.max_length,
             "status": "queued",
             "logs": [],
             "created_at": datetime.now().isoformat()
@@ -243,6 +255,10 @@ async def update_job(job_id: str, req: UpdateJobRequest):
     if req.use_voxcpm_tts is not None: job["use_voxcpm_tts"] = req.use_voxcpm_tts
     if req.use_anime is not None: job["use_anime"] = req.use_anime
     if req.video_method is not None: job["video_method"] = req.video_method
+    if req.input_lang is not None: job["input_lang"] = req.input_lang
+    if req.output_lang is not None: job["output_lang"] = req.output_lang
+    if req.video_size is not None: job["video_size"] = req.video_size
+    if req.max_length is not None: job["max_length"] = req.max_length
     state.save_state()
     return job
 
@@ -337,6 +353,10 @@ async def process_next_job():
             job["use_voxcpm_tts"],
             job["use_anime"],
             job.get("video_method", 1),
+            input_lang=job.get("input_lang", "en"),
+            output_lang=job.get("output_lang", "th"),
+            video_size=job.get("video_size", "tiktok"),
+            max_length=job.get("max_length", 0),
             progress_callback=progress_callback
         )
         
