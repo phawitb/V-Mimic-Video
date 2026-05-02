@@ -243,12 +243,22 @@ def download_video_to_path(url, output_path):
     # Ensure directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
+    # Use cookies file if present, otherwise try browser cookies
+    cookies_file = os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt')
+    cookie_opts = {}
+    if os.path.exists(cookies_file):
+        cookie_opts['cookiefile'] = cookies_file
+    else:
+        cookie_opts['cookiesfrombrowser'] = ('chrome',)
+
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': output_path,
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
+        **cookie_opts,
+        'extractor_args': {'youtube': {'player_client': ['web', 'android']}},
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
