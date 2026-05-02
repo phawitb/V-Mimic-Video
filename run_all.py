@@ -243,11 +243,30 @@ def download_video_to_path(url, output_path):
     # Ensure directory exists
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    # Use cookies file if present, otherwise try browser cookies
-    cookies_file = os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt')
+    # Resolve cookies: support JSON (browser extension export) or Netscape txt
+    _base = os.path.dirname(__file__)
+    _json_cookies = os.path.join(_base, 'youtube_cookies.json')
+    _txt_cookies  = os.path.join(_base, 'youtube_cookies.txt')
     cookie_opts = {}
-    if os.path.exists(cookies_file):
-        cookie_opts['cookiefile'] = cookies_file
+    if os.path.exists(_json_cookies):
+        # Convert JSON → Netscape format in-place (cache as .txt)
+        import json as _json
+        with open(_json_cookies, 'r', encoding='utf-8') as _f:
+            _raw = _json.load(_f)
+        with open(_txt_cookies, 'w', encoding='utf-8') as _f:
+            _f.write("# Netscape HTTP Cookie File\n")
+            for c in _raw:
+                domain   = c.get('domain', '')
+                flag     = 'TRUE' if domain.startswith('.') else 'FALSE'
+                path     = c.get('path', '/')
+                secure   = 'TRUE' if c.get('secure', False) else 'FALSE'
+                expiry   = int(c.get('expirationDate', 0))
+                name     = c.get('name', '')
+                value    = c.get('value', '')
+                _f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+        cookie_opts['cookiefile'] = _txt_cookies
+    elif os.path.exists(_txt_cookies):
+        cookie_opts['cookiefile'] = _txt_cookies
     else:
         cookie_opts['cookiesfrombrowser'] = ('chrome',)
 
@@ -258,7 +277,8 @@ def download_video_to_path(url, output_path):
         'quiet': True,
         'no_warnings': True,
         **cookie_opts,
-        'extractor_args': {'youtube': {'player_client': ['web', 'android']}},
+        'extractor_args': {'youtube': {'player_client': ['web']}},
+        'remote_components': 'ejs:github',
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
