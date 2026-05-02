@@ -36,6 +36,7 @@
         function App() {
             const [linksText, setLinksText] = useState('');
             const [playlistName, setPlaylistName] = useState('spoil_movie');
+            const [playlists, setPlaylists] = useState([]);
             const [useVoxcpm, setUseVoxcpm] = useState(true);
             const [useAnime, setUseAnime] = useState(true);
             const [videoMethod, setVideoMethod] = useState(1);
@@ -43,6 +44,21 @@
             const [outputLang, setOutputLang] = useState('th');
             const [videoSize, setVideoSize] = useState('tiktok');
             const [maxLength, setMaxLength] = useState(0);
+
+            // M4 size→maxLength defaults
+            const M4_MAX_LENGTH = { tiktok: 90, youtube: 0 };
+
+            const setMethod = (m) => {
+                setVideoMethod(m);
+                if (m === 4) {
+                    setUseAnime(false);
+                    setMaxLength(M4_MAX_LENGTH[videoSize] ?? 90);
+                }
+            };
+            const setSize = (s) => {
+                setVideoSize(s);
+                if (videoMethod === 4) setMaxLength(M4_MAX_LENGTH[s] ?? 0);
+            };
 
             const [startTime, setStartTime] = useState('09:00');
             const [endTime, setEndTime] = useState('23:59');
@@ -61,14 +77,16 @@
 
             const fetchData = async () => {
                 try {
-                    const [jobsRes, statusRes] = await Promise.all([
+                    const [jobsRes, statusRes, plRes] = await Promise.all([
                         fetch(`${BASE_URL}/jobs`),
-                        fetch(`${BASE_URL}/status`)
+                        fetch(`${BASE_URL}/status`),
+                        fetch(`${BASE_URL}/playlists`)
                     ]);
                     const jobsData = await jobsRes.json();
                     const statusData = await statusRes.json();
                     setJobs(jobsData);
                     setStatus(statusData);
+                    setPlaylists(await plRes.json());
                     if (initialLoad.current && statusData.settings) {
                         setStartTime(statusData.settings.start_time);
                         setEndTime(statusData.settings.end_time);
@@ -232,7 +250,10 @@
                                         <div className="flex flex-col gap-3">
                                             <div>
                                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Playlist</label>
-                                                <input type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-semibold mt-0.5 focus:ring-2 focus:ring-blue-500 outline-none" />
+                                                <datalist id="playlist-options">
+                                                    {playlists.map(p => <option key={p} value={p} />)}
+                                                </datalist>
+                                                <input list="playlist-options" type="text" value={playlistName} onChange={e => setPlaylistName(e.target.value)} className="w-full p-2 bg-slate-50 border rounded-lg text-sm font-semibold mt-0.5 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Playlist name..." />
                                             </div>
                                             <div>
                                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Max Length (sec)</label>
@@ -270,11 +291,11 @@
                                                         <div>
                                                             <div className="text-[10px] text-slate-400 font-bold uppercase">Output Size</div>
                                                             <div className="flex gap-1 mt-0.5">
-                                                                <button type="button" onClick={() => setVideoSize('tiktok')} className={`flex-1 py-1 rounded text-[10px] font-black border transition-all ${videoSize === 'tiktok' ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-200 text-slate-500 hover:border-amber-300'}`}>
-                                                                    TikTok<br/><span className="font-normal opacity-70">9:16</span>
+                                                                <button type="button" onClick={() => setSize('tiktok')} className={`flex-1 py-1 rounded text-[10px] font-black border transition-all ${videoSize === 'tiktok' ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-200 text-slate-500 hover:border-amber-300'}`}>
+                                                                    TikTok<br/><span className="font-normal opacity-70">9:16 · 90s</span>
                                                                 </button>
-                                                                <button type="button" onClick={() => setVideoSize('youtube')} className={`flex-1 py-1 rounded text-[10px] font-black border transition-all ${videoSize === 'youtube' ? 'bg-red-500 border-red-500 text-white' : 'border-slate-200 text-slate-500 hover:border-red-300'}`}>
-                                                                    YouTube<br/><span className="font-normal opacity-70">16:9</span>
+                                                                <button type="button" onClick={() => setSize('youtube')} className={`flex-1 py-1 rounded text-[10px] font-black border transition-all ${videoSize === 'youtube' ? 'bg-red-500 border-red-500 text-white' : 'border-slate-200 text-slate-500 hover:border-red-300'}`}>
+                                                                    YouTube<br/><span className="font-normal opacity-70">16:9 · ∞</span>
                                                                 </button>
                                                             </div>
                                                         </div>
@@ -285,16 +306,16 @@
                                             <div>
                                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Layout</label>
                                                 <div className="flex gap-1">
-                                                    <button type="button" onClick={() => setVideoMethod(1)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 1 ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-200 text-slate-500 hover:border-blue-300'}`}>
+                                                    <button type="button" onClick={() => setMethod(1)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 1 ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-200 text-slate-500 hover:border-blue-300'}`}>
                                                         M1<br/><span className="font-normal">Hdr+Sub</span>
                                                     </button>
-                                                    <button type="button" onClick={() => setVideoMethod(2)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 2 ? 'bg-violet-600 border-violet-600 text-white' : 'border-slate-200 text-slate-500 hover:border-violet-300'}`}>
+                                                    <button type="button" onClick={() => setMethod(2)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 2 ? 'bg-violet-600 border-violet-600 text-white' : 'border-slate-200 text-slate-500 hover:border-violet-300'}`}>
                                                         M2<br/><span className="font-normal">↕ Split</span>
                                                     </button>
-                                                    <button type="button" onClick={() => setVideoMethod(3)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 3 ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-200 text-slate-500 hover:border-emerald-300'}`}>
+                                                    <button type="button" onClick={() => setMethod(3)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 3 ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-200 text-slate-500 hover:border-emerald-300'}`}>
                                                         M3<br/><span className="font-normal">↔ Split</span>
                                                     </button>
-                                                    <button type="button" onClick={() => setVideoMethod(4)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 4 ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-200 text-slate-500 hover:border-amber-300'}`}>
+                                                    <button type="button" onClick={() => setMethod(4)} className={`flex-1 py-2 rounded-lg text-[10px] font-black border-2 transition-all ${videoMethod === 4 ? 'bg-amber-500 border-amber-500 text-white' : 'border-slate-200 text-slate-500 hover:border-amber-300'}`}>
                                                         M4<br/><span className="font-normal">Vocab</span>
                                                     </button>
                                                 </div>

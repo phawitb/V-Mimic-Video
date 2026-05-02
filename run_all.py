@@ -1670,7 +1670,10 @@ async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=
         log(f"🔥 Starting Pipeline for: {ENG_NAME} (Full URL: {video_url})")
 
         job_ws_dir = os.path.join(WS_DIR, ENG_NAME)
-        os.makedirs(job_ws_dir, exist_ok=True)
+        if os.path.exists(job_ws_dir):
+            shutil.rmtree(job_ws_dir)
+            log(f"🧹 Cleared workspace: {job_ws_dir}")
+        os.makedirs(job_ws_dir)
 
         raw_video_path = os.path.join(job_ws_dir, "input_video.mp4")
 
@@ -1841,7 +1844,7 @@ async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=
                         vocab_list = json.load(f)
                 else:
                     log("🤖 Step 6b: Extracting vocabulary for M4 (episode-specific)...")
-                    ep_dur_sec = (ep_end - ep_start) if ep_end > ep_start else 0
+                    ep_dur_sec = (ep_end - ep_start) if (ep_end is not None and ep_start is not None) else _ffprobe_duration(ep_raw_video)
                     vocab_list = await asyncio.to_thread(extract_vocab_with_ollama, ep_eng_sub,
                                                          input_lang=input_lang, output_lang=output_lang,
                                                          clip_duration_sec=ep_dur_sec, log_func=log)
@@ -1946,11 +1949,6 @@ async def run_pipeline(video_url, playlist_name, use_voxcpm_tts=True, use_anime=
             log(f"✅ {'[' + ep_label + '] ' if ep_label else ''}Output: {final_vdo_path}")
             last_vdo_path  = final_vdo_path
             last_json_path = final_json_path
-
-        # Cleanup workspace after all episodes complete
-        if last_vdo_path and os.path.exists(last_vdo_path):
-            log(f"🧹 Cleaning up workspace: {job_ws_dir}")
-            shutil.rmtree(job_ws_dir)
 
         return {"status": "success", "video": os.path.abspath(last_vdo_path), "json": os.path.abspath(last_json_path)}
 

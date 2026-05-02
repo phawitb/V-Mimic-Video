@@ -200,6 +200,13 @@ async def interrupt_job(job_id: str):
         return {"status": "interrupted"}
     raise HTTPException(status_code=400, detail="Job is not active")
 
+@app.get("/playlists")
+async def get_playlists():
+    base = "outputs"
+    if not os.path.exists(base):
+        return []
+    return sorted(d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d)))
+
 @app.get("/open-file")
 async def open_file(path: str):
     import subprocess
